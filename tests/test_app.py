@@ -107,6 +107,25 @@ def test_hedging_lab_runs_a_simulation():
     assert at.metric, "the hedging lab should report summary metrics"
 
 
+def test_hedging_lab_path_picker_covers_every_option():
+    from optlab import hedge as hedge_mod
+
+    at = run_page("hedging")
+    for choice in list(hedge_mod.NOTABLE) + ["Pick by number"]:
+        at.session_state["hg_path_pick"] = choice
+        at.run()
+        assert not at.exception, f"path choice {choice!r} raised"
+
+
+def test_hedging_lab_accepts_an_explicit_path_number():
+    at = run_page("hedging")
+    at.session_state["hg_path_pick"] = "Pick by number"
+    at.session_state["hg_path_index"] = 17
+    at.run()
+    assert not at.exception
+    assert any("Path 17" in m.value for m in at.markdown), "the page should name the path"
+
+
 def test_hedging_lab_with_costs_and_a_band():
     at = run_page("hedging")
     at.session_state["hg_cost"] = 5.0

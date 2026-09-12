@@ -69,16 +69,57 @@ class HedgeSpec:
         )
 
 
+#: Named paths worth looking at, and why each one is interesting.
+NOTABLE = {
+    "Worst": "The path that lost the most. Usually the spot whipsawing across the "
+             "strike, where a short gamma position pays for every crossing.",
+    "Median": "The typical outcome. What you should expect, not what you should fear.",
+    "Best": "The path that made the most. For a short position, usually the spot "
+            "drifting quietly away from the strike and staying there.",
+    "First": "Path number one, the default. No special property, which is its own "
+             "kind of useful.",
+}
+
+
 @dataclass
 class HedgeResult:
-    """Output of a run: one path in detail, plus the distribution over many."""
+    """Output of a run: the distribution over many paths, plus any one in detail."""
 
-    steps: pd.DataFrame  # per-rebalance detail for the first path
+    steps: pd.DataFrame | None  # per-rebalance detail for the selected path
     final_pnl: np.ndarray  # final P&L of every path
     paths: np.ndarray  # the simulated spot paths themselves
     times: np.ndarray
     premium: float  # what the position cost to put on
     spec: HedgeSpec = field(repr=False)
+    horizon: float = 0.0
+
+    def detail_for(self, index: int) -> pd.DataFrame:
+        """Per-step detail for one path, re-walked on its own.
+
+        Storing every step of every path would cost hundreds of megabytes at
+        the larger settings. Re-walking one path costs a single pass and gives
+        bit-identical numbers, because the accounting never lets one path touch
+        another.
+        """
+        index = int(np.clip(index, 0, len(self.final_pnl) - 1))
+        _, rows = _walk(self.spec, self.paths[index:index + 1], self.horizon, record=True)
+        return _finalise(rows, self.spec)
+
+    def path_index(self, which: str) -> int:
+        """Index of a named path: worst, median, best, or first."""
+        pnl = self.final_pnl
+        if which == "Worst":
+            return int(np.argmin(pnl))
+        if which == "Best":
+            return int(np.argmax(pnl))
+        if which == "Median":
+            # The path whose P&L is closest to the median, not the median value.
+            return int(np.argmin(np.abs(pnl - float(np.median(pnl)))))
+        return 0
+
+    def rank_of(self, index: int) -> int:
+        """Where this path finished, 1 being the worst."""
+        return int(np.sum(self.final_pnl < self.final_pnl[int(index)])) + 1
 
     @property
     def mean_pnl(self) -> float:
@@ -100,7 +141,8 @@ class HedgeResult:
             "worst": float(np.min(p)),
             "best": float(np.max(p)),
             "win_rate": float(np.mean(p > 0)),
-            "total_cost": float(np.mean(self.steps["tx_cost"].sum())),
+            "total_cost": (float(self.steps["tx_cost"].sum())
+                           if self.steps is not None else 0.0),
         }
 
 
@@ -125,13 +167,7 @@ def simulate_paths(
     return spot * np.exp(log_path)
 
 
-def run(spec: HedgeSpec) -> HedgeResult:
-    """Hedge the position along every simulated path and account for the P&L.
-
-    The book is kept in three pieces - the option position, the stock hedge and
-    a cash account - and it starts at exactly zero value, so whatever it is
-    worth at the end IS the profit and loss.
-    """
+def _resolve_horizon(spec: HedgeSpec) -> float:
     horizon = spec.horizon
     if horizon is None:
         from .strategies import first_expiry
@@ -139,11 +175,26 @@ def run(spec: HedgeSpec) -> HedgeResult:
         horizon = first_expiry(spec.legs)
     if horizon <= 0:
         raise ValueError("hedging horizon must be positive")
+    return float(horizon)
 
-    n, dt = spec.n_steps, horizon / spec.n_steps
-    paths = simulate_paths(
-        spec.spot, spec.drift, spec.real_vol, horizon, n, spec.n_paths, spec.seed
-    )
+
+def _walk(spec: HedgeSpec, paths: np.ndarray, horizon: float, record: bool = False):
+    """Run the hedged book along every column of `paths`.
+
+    The book is kept in three pieces - the option position, the stock hedge and
+    a cash account - and it starts at exactly zero value, so whatever it is
+    worth at the end IS the profit and loss.
+
+    Every operation here is elementwise across paths: no path can influence
+    another. That is what makes `HedgeResult.detail_for` possible - re-walking a
+    single path on its own reproduces its numbers from the full run exactly,
+    so the app can show the detail of any path without storing all of them.
+
+    With `record`, the per-step detail of the FIRST column is collected. Pass a
+    one-column slice to record the path you actually want.
+    """
+    n = spec.n_steps
+    dt = horizon / n
     times = np.linspace(0.0, horizon, n + 1)
     mkt = spec.market()
     growth = np.exp(spec.rate * dt)
@@ -162,17 +213,18 @@ def run(spec: HedgeSpec) -> HedgeResult:
     shares = -delta  # hold the offsetting stock: position delta + hedge = 0
     tx = np.abs(shares) * S0 * spec.cost_rate
     cash = -(value + shares * S0) - tx  # makes the book worth zero at inception
-    premium = float(value[0])
 
-    rows = [{
-        "step": 0, "t": 0.0, "spot": float(S0[0]),
-        "position_value": float(value[0]), "delta": float(delta[0]),
-        "gamma": float(position_greek(S0, "gamma", 0.0)[0]),
-        "shares": float(shares[0]), "trade": float(shares[0]), "tx_cost": float(tx[0]),
-        "cash": float(cash[0]), "pnl": float(value[0] + shares[0] * S0[0] + cash[0]),
-        "delta_term": 0.0, "gamma_term": 0.0, "theta_term": 0.0,
-        "hedge_term": 0.0, "carry_term": 0.0,
-    }]
+    rows = None
+    if record:
+        rows = [{
+            "step": 0, "t": 0.0, "spot": float(S0[0]),
+            "position_value": float(value[0]), "delta": float(delta[0]),
+            "gamma": float(position_greek(S0, "gamma", 0.0)[0]),
+            "shares": float(shares[0]), "trade": float(shares[0]), "tx_cost": float(tx[0]),
+            "cash": float(cash[0]), "pnl": float(value[0] + shares[0] * S0[0] + cash[0]),
+            "delta_term": 0.0, "gamma_term": 0.0, "theta_term": 0.0,
+            "hedge_term": 0.0, "carry_term": 0.0,
+        }]
 
     # --- walk the path ----------------------------------------------------
     for i in range(1, n + 1):
@@ -211,22 +263,36 @@ def run(spec: HedgeSpec) -> HedgeResult:
         cash = cash - trade * S_now - step_tx
         shares = new_shares
 
-        rows.append({
-            "step": i, "t": float(t), "spot": float(S_now[0]),
-            "position_value": float(value[0]), "delta": float(-target[0]),
-            "gamma": float(gamma_prev[0]), "shares": float(shares[0]),
-            "trade": float(trade[0]), "tx_cost": float(step_tx[0]), "cash": float(cash[0]),
-            "pnl": float(value[0] + shares[0] * S_now[0] + cash[0]),
-            "delta_term": float(delta_term[0]), "gamma_term": float(gamma_term[0]),
-            "theta_term": float(theta_term[0]), "hedge_term": float(hedge_term[0]),
-            "carry_term": float(carry_term[0]),
-        })
+        if record:
+            rows.append({
+                "step": i, "t": float(t), "spot": float(S_now[0]),
+                "position_value": float(value[0]), "delta": float(-target[0]),
+                "gamma": float(gamma_prev[0]), "shares": float(shares[0]),
+                "trade": float(trade[0]), "tx_cost": float(step_tx[0]),
+                "cash": float(cash[0]),
+                "pnl": float(value[0] + shares[0] * S_now[0] + cash[0]),
+                "delta_term": float(delta_term[0]), "gamma_term": float(gamma_term[0]),
+                "theta_term": float(theta_term[0]), "hedge_term": float(hedge_term[0]),
+                "carry_term": float(carry_term[0]),
+            })
 
     # --- close out --------------------------------------------------------
     S_end = paths[:, -1]
     unwind_tx = np.abs(shares) * S_end * spec.cost_rate
     final_pnl = position_value(S_end, horizon) + shares * S_end + cash - unwind_tx
 
+    if record:
+        # Charge the liquidation into the last recorded step. Without this the
+        # plotted path ends one transaction cost above the number the summary
+        # and the distribution report, and the two would quietly disagree.
+        rows[-1]["tx_cost"] += float(unwind_tx[0])
+        rows[-1]["pnl"] = float(final_pnl[0])
+
+    return np.asarray(final_pnl, dtype=float), rows
+
+
+def _finalise(rows: list[dict], spec: HedgeSpec) -> pd.DataFrame:
+    """Turn recorded steps into the frame the app charts, with running totals."""
     steps = pd.DataFrame(rows)
     for term in ("gamma", "theta", "carry", "delta", "hedge"):
         steps[f"cum_{term}"] = steps[f"{term}_term"].cumsum()
@@ -240,11 +306,27 @@ def run(spec: HedgeSpec) -> HedgeResult:
     )
     steps["cum_gamma_theta"] = steps["cum_gamma"] + steps["cum_theta"]
     steps["moneyness"] = steps["spot"] / _reference_strike(spec.legs)
+    steps["days"] = steps["t"] * 365.0
+    return steps
 
-    return HedgeResult(
-        steps=steps, final_pnl=np.asarray(final_pnl, dtype=float),
-        paths=paths, times=times, premium=premium, spec=spec,
+
+def run(spec: HedgeSpec) -> HedgeResult:
+    """Hedge the position along every simulated path and account for the P&L."""
+    horizon = _resolve_horizon(spec)
+    paths = simulate_paths(
+        spec.spot, spec.drift, spec.real_vol, horizon, spec.n_steps,
+        spec.n_paths, spec.seed,
     )
+    final_pnl, _ = _walk(spec, paths, horizon)
+    premium = float(np.asarray(value_at(spec.legs, paths[:1, 0], 0.0, spec.market()))[0])
+
+    result = HedgeResult(
+        steps=None, final_pnl=final_pnl, paths=paths,
+        times=np.linspace(0.0, horizon, spec.n_steps + 1),
+        premium=premium, spec=spec, horizon=horizon,
+    )
+    result.steps = result.detail_for(0)
+    return result
 
 
 def _reference_strike(legs: Sequence[Leg]) -> float:

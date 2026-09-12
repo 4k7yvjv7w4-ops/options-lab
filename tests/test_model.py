@@ -242,6 +242,57 @@ def test_carry_is_the_term_that_rates_drive():
     assert float(r.steps["cum_carry"].iloc[-1]) == pytest.approx(0.0, abs=1e-12)
 
 
+def test_detail_for_any_path_matches_the_full_run():
+    """Re-walking one path must reproduce its number from the vectorised run.
+
+    This is the property the whole path picker rests on. If a path could
+    influence another through the accounting, the detail the app shows would
+    not be the detail of the path it claims.
+    """
+    r = hedge.run(hedge.HedgeSpec(SHORT_CALL, implied_vol=0.28, real_vol=0.20,
+                                  n_steps=40, n_paths=120, cost_rate=0.0004,
+                                  band=0.05, seed=31))
+    for i in (0, 1, 17, 60, 119):
+        detail = r.detail_for(i)
+        assert float(detail["pnl"].iloc[-1]) == pytest.approx(float(r.final_pnl[i]), abs=1e-9)
+        assert float(detail["spot"].iloc[-1]) == pytest.approx(float(r.paths[i, -1]))
+        assert len(detail) == r.spec.n_steps + 1
+
+
+def test_named_paths_pick_the_right_ones():
+    r = hedge.run(hedge.HedgeSpec(SHORT_CALL, n_steps=30, n_paths=200, seed=37))
+    pnl = r.final_pnl
+    assert pnl[r.path_index("Worst")] == pytest.approx(pnl.min())
+    assert pnl[r.path_index("Best")] == pytest.approx(pnl.max())
+    assert r.path_index("First") == 0
+    median_gap = abs(pnl[r.path_index("Median")] - np.median(pnl))
+    assert median_gap <= np.min(np.abs(pnl - np.median(pnl))) + 1e-12
+
+
+def test_every_named_path_has_an_explanation():
+    r = hedge.run(hedge.HedgeSpec(SHORT_CALL, n_steps=20, n_paths=50, seed=39))
+    for name in hedge.NOTABLE:
+        assert hedge.NOTABLE[name]
+        assert 0 <= r.path_index(name) < len(r.final_pnl)
+
+
+def test_rank_orders_paths_from_worst_to_best():
+    r = hedge.run(hedge.HedgeSpec(SHORT_CALL, n_steps=20, n_paths=80, seed=41))
+    assert r.rank_of(r.path_index("Worst")) == 1
+    assert r.rank_of(r.path_index("Best")) == len(r.final_pnl)
+
+
+def test_an_out_of_range_path_is_clamped_not_crashed():
+    r = hedge.run(hedge.HedgeSpec(SHORT_CALL, n_steps=15, n_paths=10, seed=43))
+    assert len(r.detail_for(9999)) == r.spec.n_steps + 1
+    assert len(r.detail_for(-5)) == r.spec.n_steps + 1
+
+
+def test_default_detail_is_the_first_path():
+    r = hedge.run(hedge.HedgeSpec(SHORT_CALL, n_steps=20, n_paths=30, seed=47))
+    assert r.steps["pnl"].iloc[-1] == pytest.approx(float(r.final_pnl[0]), abs=1e-9)
+
+
 def test_paths_start_at_spot_and_stay_positive():
     paths = hedge.simulate_paths(100.0, 0.05, 0.2, 1.0, 50, 20, seed=23)
     assert paths.shape == (20, 51)

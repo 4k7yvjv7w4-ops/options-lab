@@ -248,8 +248,13 @@ def grid_frame(x_edges: np.ndarray, y_edges: np.ndarray, z: np.ndarray,
 
 
 def histogram(values, *, bins: int = 40, height: int = 260, x_title: str = "value",
-              highlight_zero: bool = True, mean_line: bool = True) -> alt.LayerChart:
-    """Distribution of an outcome, with the zero line and the mean called out."""
+              highlight_zero: bool = True, mean_line: bool = True,
+              highlight: float | None = None, highlight_label: str = "selected") -> alt.LayerChart:
+    """Distribution of an outcome, with the zero line and the mean called out.
+
+    `highlight` marks one observation inside the distribution, which is how a
+    single inspected path is placed among all the others.
+    """
     c = colors()
     values = np.asarray(values, dtype=float)
     counts, edges = np.histogram(values, bins=bins)
@@ -281,6 +286,10 @@ def histogram(values, *, bins: int = 40, height: int = 260, x_title: str = "valu
         layers.append(alt.Chart(pd.DataFrame({"x": [float(values.mean())]})).mark_rule(
             color=c["series"][1], strokeWidth=2).encode(
             x="x:Q", tooltip=[alt.Tooltip("x:Q", title="mean", format=",.3f")]))
+    if highlight is not None:
+        layers.append(alt.Chart(pd.DataFrame({"x": [float(highlight)]})).mark_rule(
+            color=c["series"][2], strokeWidth=2.5).encode(
+            x="x:Q", tooltip=[alt.Tooltip("x:Q", title=highlight_label, format=",.3f")]))
     return alt.layer(*layers).properties(height=height)
 
 

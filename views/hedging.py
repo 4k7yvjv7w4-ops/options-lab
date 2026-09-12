@@ -46,9 +46,10 @@ def render() -> None:
 
     _verdict(result, edge)
     st.divider()
-    _distribution(result, edge)
+    chosen = _path_picker(result)
+    _distribution(result, chosen)
     st.divider()
-    _single_path(result)
+    _single_path(result, chosen)
     st.divider()
     _frequency_study(spec_args)
 
@@ -146,24 +147,53 @@ def _verdict(result: hedge.HedgeResult, edge: float) -> None:
         )
 
 
-def _distribution(result: hedge.HedgeResult, edge: float) -> None:
+def _path_picker(result: hedge.HedgeResult) -> int:
+    """Choose which of the simulated paths to open up below."""
+    st.markdown("#### Pick a path to inspect")
+    total = len(result.final_pnl)
+    options = list(hedge.NOTABLE) + ["Pick by number"]
+    choice = st.segmented_control(
+        "Which path", options, default="Worst", key="hg_path_pick",
+        selection_mode="single", label_visibility="collapsed",
+    ) or "Worst"
+
+    if choice == "Pick by number":
+        index = int(st.number_input("Path number", 0, total - 1, 0, key="hg_path_index",
+                                    help=f"Any path from 0 to {total - 1}."))
+        note = "Whichever path you asked for."
+    else:
+        index = result.path_index(choice)
+        note = hedge.NOTABLE[choice]
+
+    pnl = float(result.final_pnl[index])
+    rank = result.rank_of(index)
+    st.caption(
+        f"**Path {index}** finished at **{pnl:+,.3f}**, ranked {rank:,} out of "
+        f"{total:,} from worst to best. {note}"
+    )
+    return index
+
+
+def _distribution(result: hedge.HedgeResult, chosen: int) -> None:
     st.markdown("#### Every path's final P&L")
     ui.show(ui.histogram(result.final_pnl, bins=45, height=280,
-                         x_title="Profit and loss per path"))
+                         x_title="Profit and loss per path",
+                         highlight=float(result.final_pnl[chosen]),
+                         highlight_label=f"path {chosen}"))
     s = result.summary()
     st.caption(
         f"Median {s['p50']:+,.3f}. The middle 90% of paths land between "
         f"{s['p05']:+,.3f} and {s['p95']:+,.3f}, worst {s['worst']:+,.3f}, "
-        f"best {s['best']:+,.3f}. The orange line is the mean and the dashed line is zero. "
-        "When implied and realised vol differ enough, the whole distribution shifts to "
-        "one side of zero and hedging error can no longer change the sign of the answer."
+        f"best {s['best']:+,.3f}. The orange line is the mean, the green line is the "
+        f"path you selected, and the dashed line is zero. When implied and realised vol "
+        f"differ enough, the whole distribution shifts to one side of zero and hedging "
+        f"error can no longer change the sign of the answer."
     )
 
 
-def _single_path(result: hedge.HedgeResult) -> None:
-    st.markdown("#### One path, step by step")
-    steps = result.steps.copy()
-    steps["days"] = steps["t"] * 365.0
+def _single_path(result: hedge.HedgeResult, chosen: int) -> None:
+    st.markdown(f"#### Path {chosen}, step by step")
+    steps = result.detail_for(chosen)
     strike = result.spec.legs[0].strike
 
     ui.show(
@@ -197,11 +227,7 @@ def _single_path(result: hedge.HedgeResult) -> None:
                           color_title="", zero_line=True,
                           order=["Gamma earned", "Theta paid", "Actual P&L"],
                           dashed=["Actual P&L"]))
-    ui.takeaway(
-        "This is the whole argument in one picture. Gamma and theta run in opposite "
-        "directions, and where they end up relative to each other is the P&L. The "
-        "direction the spot went does not appear anywhere."
-    )
+    _attribution_takeaway(steps, result, chosen)
     _reconciliation(steps)
 
     with st.expander("The numbers behind this path"):
@@ -217,6 +243,27 @@ def _single_path(result: hedge.HedgeResult) -> None:
                 "tx_cost": st.column_config.NumberColumn("cost", format="%.5f"),
             },
         )
+
+
+def _attribution_takeaway(steps: pd.DataFrame, result: hedge.HedgeResult,
+                          chosen: int) -> None:
+    """Say what THIS path did, not what paths do in general."""
+    last = steps.iloc[-1]
+    gamma, theta = float(last["cum_gamma"]), float(last["cum_theta"])
+    travelled = float(np.abs(np.diff(steps["spot"].to_numpy())).sum())
+    net_move = float(steps["spot"].iloc[-1] - steps["spot"].iloc[0])
+    base = (
+        "This is the whole argument in one picture. Gamma and theta run in opposite "
+        "directions, and where they end up relative to each other is the P&L. The "
+        "direction the spot went does not appear anywhere."
+    )
+    detail = (
+        f" On this path the spot travelled {travelled:,.1f} in total to end up "
+        f"{net_move:+,.1f} from where it started, and that total distance, not the "
+        f"{net_move:+,.1f}, is what set the gamma line at {gamma:+,.3f} against "
+        f"{theta:+,.3f} of theta."
+    )
+    ui.takeaway(base + detail)
 
 
 def _reconciliation(steps: pd.DataFrame) -> None:
@@ -245,12 +292,22 @@ def _reconciliation(steps: pd.DataFrame) -> None:
         column_config={"Amount": st.column_config.NumberColumn("Amount", format="%.4f")},
     )
     residual = abs(total - realised)
-    st.caption(
+    scale = max(abs(realised), 1e-9)
+    note = (
         f"The attribution lands within {residual:.4f} of the realised number. That "
-        f"residual is the third-order part of the Taylor expansion the greeks truncate, "
-        f"and it is the only thing in the P&L the greeks do not name. Everything else "
-        f"in this trade has a greek attached to it."
+        f"residual is everything the greeks do not name: the third-order part of the "
+        f"Taylor expansion, which delta, gamma and theta truncate."
     )
+    if residual > 0.1 * scale:
+        note += (
+            " It is sizeable on this path, which is itself informative. The expansion "
+            "is only accurate over small moves, so coarse rebalancing, a wide no-trade "
+            "band, or a path that jumps around lets the untracked term grow. Raise the "
+            "rebalance count and watch it shrink."
+        )
+    else:
+        note += " Everything else in this trade has a greek attached to it."
+    st.caption(note)
 
 
 def _frequency_study(spec_args: tuple) -> None:
