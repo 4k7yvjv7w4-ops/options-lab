@@ -8,10 +8,28 @@ It is a teaching instrument, not a trading tool. Everything is computed live
 from one Black-Scholes-Merton implementation, so the charts and the claims in
 the text cannot drift apart.
 
+## Running it
+
+Needs Python 3.10 or newer. Use a virtual environment: it keeps these packages
+out of your system Python, and it puts `pip` and `streamlit` on your PATH,
+which is why the bare `pip` command does not exist on a fresh macOS.
+
 ```bash
-pip install -r requirements.txt
+cd options-lab
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+python3 -m pip install --upgrade pip
+python3 -m pip install -r requirements.txt
 streamlit run app.py
 ```
+
+It opens at http://localhost:8501. Press Ctrl-C to stop it, and `deactivate`
+to leave the virtual environment. Next time, only the `source` line and
+`streamlit run app.py` are needed.
+
+**`command not found: python3`** means the macOS command line tools are not
+installed. Run `xcode-select --install` and accept the dialog, or install
+Python from python.org or with `brew install python`.
 
 ## The pages
 

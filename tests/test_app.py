@@ -6,8 +6,14 @@ bad widget keys, state written after its widget was created, stale API calls,
 charts built from a frame that does not have the column.
 """
 
+from pathlib import Path
+
 import pytest
 from streamlit.testing.v1 import AppTest
+
+#: Absolute, because Streamlit changed what a relative AppTest path is relative
+#: to: the working directory up to 1.58, the calling test file from 1.63.
+APP = str(Path(__file__).resolve().parent.parent / "app.py")
 
 PAGES = ["home", "pricer", "surfaces", "builder", "hedging", "volsmile", "lessons"]
 
@@ -39,7 +45,7 @@ def test_page_renders_something(module):
 
 def test_whole_app_boots():
     """The real entry point, navigation and shared sidebar included."""
-    at = AppTest.from_file("app.py", default_timeout=120).run()
+    at = AppTest.from_file(APP, default_timeout=120).run()
     assert not at.exception, [e.value for e in at.exception]
 
 
