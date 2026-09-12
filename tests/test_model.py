@@ -311,6 +311,105 @@ def test_a_zero_horizon_is_rejected_rather_than_dividing_by_zero():
         hedge.run(hedge.HedgeSpec([Leg(bs.CALL, -1.0, 100.0, 0.0)]))
 
 
+# --- the 3-D surface ------------------------------------------------------
+
+
+def test_surface_builds_for_every_greek():
+    from optlab import ui
+
+    spots = np.linspace(70.0, 130.0, 30)
+    days = np.linspace(1.0, 180.0, 25)
+    S, D = np.meshgrid(spots, days)
+    for greek, fn in bs.GREEK_FUNCS.items():
+        z = bs.scale_for_display(greek, fn(S, 100.0, D / 365.0, 0.04, 0.0, 0.2))
+        fig = ui.surface(spots, days, z, x_title="Spot", y_title="Days", z_title=greek)
+        assert fig.data[0].type == "surface"
+        assert fig.data[0].z.shape == (len(days), len(spots))
+
+
+def test_capping_lowers_the_drawn_height_but_not_the_reported_value():
+    """A capped peak must still tell the truth when you hover it."""
+    from optlab import ui
+
+    spots = np.linspace(80.0, 120.0, 40)
+    days = np.linspace(1.0, 90.0, 30)
+    S, D = np.meshgrid(spots, days)
+    z = bs.scale_for_display("gamma", bs.gamma(S, 100.0, D / 365.0, 0.04, 0.0, 0.2))
+    cap = float(np.percentile(z, 90))
+    fig = ui.surface(spots, days, z, x_title="Spot", y_title="Days", z_title="gamma",
+                     cap=cap)
+    assert np.nanmax(fig.data[0].z) == pytest.approx(cap)
+    assert np.nanmax(fig.data[0].customdata) == pytest.approx(float(np.nanmax(z)))
+    assert np.nanmax(z) > cap  # the test would be vacuous otherwise
+
+
+def test_a_signed_surface_gets_a_symmetric_diverging_scale():
+    from optlab import ui
+
+    spots = np.linspace(80.0, 120.0, 20)
+    days = np.linspace(1.0, 90.0, 15)
+    S, D = np.meshgrid(spots, days)
+    z = bs.scale_for_display("theta", bs.theta(S, 100.0, D / 365.0, 0.04, 0.0, 0.2))
+    fig = ui.surface(spots, days, z, x_title="Spot", y_title="Days", z_title="theta",
+                     diverging=True)
+    assert fig.data[0].cmin == pytest.approx(-fig.data[0].cmax)
+
+
+def test_an_all_negative_field_darkens_toward_its_extreme():
+    """Theta is negative everywhere, and its deepest point must be the darkest.
+
+    Mapping the raw range light-to-dark would paint the most negative theta
+    palest and the near-zero corner darkest, which reads exactly backwards.
+    """
+    from optlab import ui
+
+    up_steps, up_domain = ui.sequential_scale(0.0, 0.25)
+    down_steps, down_domain = ui.sequential_scale(-0.14, 0.0)
+    assert down_steps == up_steps[::-1]
+    assert down_domain[1] == 0.0 and down_domain[0] < 0
+    assert up_domain[0] == 0.0 and up_domain[1] > 0
+
+
+def test_the_theta_surface_is_coloured_from_zero_downward():
+    from optlab import ui
+
+    spots = np.linspace(80.0, 120.0, 20)
+    days = np.linspace(1.0, 120.0, 15)
+    S, D = np.meshgrid(spots, days)
+    z = bs.scale_for_display("theta", bs.theta(S, 100.0, D / 365.0, 0.04, 0.0, 0.2))
+    assert np.nanmax(z) <= 0  # the premise: this really is an all-negative field
+    fig = ui.surface(spots, days, z, x_title="S", y_title="D", z_title="theta")
+    assert fig.data[0].cmax == pytest.approx(0.0)
+    assert fig.data[0].cmin < 0
+    darkest = fig.data[0].colorscale[0][1]  # the colour at cmin, the deepest theta
+    lightest = fig.data[0].colorscale[-1][1]
+    assert darkest == ui.colors()["seq"][-1]
+    assert lightest == ui.colors()["seq"][0]
+
+
+def test_signed_extreme_keeps_the_sign():
+    from optlab import ui
+
+    assert ui.signed_extreme([0.1, -0.9, 0.4]) == pytest.approx(-0.9)
+    assert ui.signed_extreme([0.1, 0.9, -0.4]) == pytest.approx(0.9)
+    assert ui.signed_extreme([np.nan, -2.0, np.nan]) == pytest.approx(-2.0)
+    assert ui.signed_extreme([]) == 0.0
+
+    # The case it exists for: theta's extreme is negative, not positive.
+    S, D = np.meshgrid(np.linspace(80.0, 120.0, 20), np.linspace(1.0, 90.0, 15))
+    z = bs.scale_for_display("theta", bs.theta(S, 100.0, D / 365.0, 0.04, 0.0, 0.2))
+    assert ui.signed_extreme(z) < 0
+
+
+def test_colorscales_run_light_to_dark_and_pole_to_pole():
+    from optlab import ui
+
+    seq = ui.plotly_colorscale(diverging=False)
+    assert seq[0][0] == 0.0 and seq[-1][0] == 1.0
+    div = ui.plotly_colorscale(diverging=True)
+    assert [stop for stop, _ in div] == [0.0, 0.5, 1.0]
+
+
 # --- smile ----------------------------------------------------------------
 
 

@@ -202,6 +202,19 @@ def robust_limit(values, percentile: float = 98.0) -> tuple[float, bool]:
     return cut, top > cut * 1.5
 
 
+def signed_extreme(values) -> float:
+    """The value furthest from zero, sign intact.
+
+    Reporting max(abs(...)) would tell the reader theta "reaches 0.1974" when
+    the number on the chart is -0.1974.
+    """
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return 0.0
+    return float(arr[np.argmax(np.abs(arr))])
+
+
 def heatmap(
     df: pd.DataFrame, x: str, y: str, value: str, *, height: int = 340,
     x_title=None, y_title=None, value_title=None, diverging: bool = False,
@@ -209,14 +222,17 @@ def heatmap(
 ) -> alt.Chart:
     """A magnitude grid: one hue light-to-dark, or two hues either side of zero."""
     c = colors()
-    lim, _ = robust_limit(df[value].to_numpy(), percentile)
+    values = df[value].to_numpy()
+    lim, _ = robust_limit(values, percentile)
     if diverging:
         scale = alt.Scale(range=[c["div_low"], c["div_mid"], c["div_high"]],
                           domain=[-lim, 0.0, lim], type="linear", clamp=True)
     else:
-        vmin = float(np.nanmin(df[value].to_numpy()))
-        lo = min(vmin, 0.0) if vmin >= 0 else -lim
-        scale = alt.Scale(range=c["seq"], type="linear", domain=[lo, lim], clamp=True)
+        # Clip toward zero from whichever side the field actually lives on.
+        vmin, vmax = float(np.nanmin(values)), float(np.nanmax(values))
+        steps, _ = sequential_scale(vmin, vmax)
+        domain = [-lim, 0.0] if vmax <= 0 else [min(0.0, vmin), lim]
+        scale = alt.Scale(range=steps, type="linear", domain=domain, clamp=True)
     return alt.Chart(df).mark_rect().encode(
         x=alt.X(f"{x}:Q", bin="binned", title=x_title or x, axis=alt.Axis(**_AXIS)),
         x2=f"{x}2:Q",
@@ -230,6 +246,110 @@ def heatmap(
             alt.Tooltip(f"{value}:Q", title=value_title or value, format=value_format),
         ],
     ).properties(height=height)
+
+
+def sequential_scale(vmin: float, vmax: float) -> tuple[list, list]:
+    """Colours and domain for a field that keeps one sign.
+
+    A sequential ramp has to run from "nearest zero" to "largest magnitude",
+    and for an all-negative field, like theta, largest magnitude is the most
+    NEGATIVE number. Mapping the raw range light-to-dark in that case paints
+    the deepest theta palest and the near-zero corner darkest, which reads
+    exactly backwards. So the ramp is reversed when the field sits below zero.
+    """
+    steps = list(colors()["seq"])
+    if vmax <= 0:
+        return steps[::-1], [float(vmin), 0.0]  # darkest at the most negative
+    return steps, [min(0.0, float(vmin)), float(vmax)]
+
+
+def plotly_colorscale(diverging: bool = False, steps: list | None = None) -> list:
+    """A palette in the [[position, colour], ...] form Plotly wants."""
+    c = colors()
+    if diverging:
+        return [[0.0, c["div_low"]], [0.5, c["div_mid"]], [1.0, c["div_high"]]]
+    steps = steps or c["seq"]
+    return [[i / (len(steps) - 1), col] for i, col in enumerate(steps)]
+
+
+def surface(
+    x: np.ndarray, y: np.ndarray, z: np.ndarray, *, x_title: str, y_title: str,
+    z_title: str, height: int = 560, diverging: bool = False,
+    hover_format: str = ".4f", cap: float | None = None,
+):
+    """A 3-D surface of the same grid the flat map draws.
+
+    Plotly rather than Altair, because Vega-Lite has no third dimension at all.
+    This is the one escape hatch the rest of the app deliberately avoids.
+
+    `cap` clamps the height so a single spike cannot flatten everything else
+    into the floor. The colour scale follows whatever the height does, so the
+    two never tell different stories.
+    """
+    import plotly.graph_objects as go  # imported lazily: only this view needs it
+
+    c = colors()
+    z = np.asarray(z, dtype=float)
+    plotted = np.clip(z, -cap, cap) if cap is not None else z
+
+    if diverging:
+        lim = float(np.nanmax(np.abs(plotted))) or 1.0
+        scale, cmin, cmax = plotly_colorscale(True), -lim, lim
+    else:
+        steps, (cmin, cmax) = sequential_scale(
+            float(np.nanmin(plotted)), float(np.nanmax(plotted))
+        )
+        scale = plotly_colorscale(False, steps)
+
+    fig = go.Figure(
+        go.Surface(
+            x=np.asarray(x, float), y=np.asarray(y, float), z=plotted,
+            customdata=z,  # the TRUE value, so a capped peak still reports itself
+            colorscale=scale, cmin=cmin, cmax=cmax,
+            colorbar=dict(
+                title=dict(text=z_title, side="right",
+                           font=dict(color=c["ink_soft"], size=12)),
+                thickness=14, outlinewidth=0,
+                tickfont=dict(color=c["ink_soft"], size=11),
+            ),
+            hovertemplate=(f"{x_title}: %{{x:,.2f}}<br>{y_title}: %{{y:,.2f}}"
+                           f"<br>{z_title}: %{{customdata:{hover_format}}}<extra></extra>"),
+            contours=dict(z=dict(show=True, usecolormap=True, project_z=False,
+                                 width=1, highlightcolor=c["muted"])),
+        )
+    )
+
+    axis = dict(
+        gridcolor=c["grid"], zerolinecolor=c["axis"], showbackground=False,
+        color=c["ink_soft"], tickfont=dict(size=10),
+    )
+
+    def titled(text):
+        return dict(title=dict(text=text, font=dict(size=12)), **axis)
+
+    fig.update_layout(
+        height=height,
+        margin=dict(l=0, r=0, t=0, b=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color=c["ink_soft"], size=12),
+        scene=dict(
+            xaxis=titled(x_title),
+            yaxis=titled(y_title),
+            zaxis=titled(z_title),
+            # Pulled in close: the default camera distance leaves the surface
+            # small in a lot of empty box.
+            camera=dict(eye=dict(x=1.22, y=-1.32, z=0.72)),
+            aspectratio=dict(x=1.25, y=1.25, z=0.85),
+        ),
+    )
+    return fig
+
+
+def show_surface(fig) -> None:
+    st.plotly_chart(fig, width="stretch", theme=None,
+                    config={"displaylogo": False,
+                            "modeBarButtonsToRemove": ["toImage", "sendDataToCloud"]})
 
 
 def grid_frame(x_edges: np.ndarray, y_edges: np.ndarray, z: np.ndarray,

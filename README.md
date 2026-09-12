@@ -66,7 +66,7 @@ it without browser chrome, which is worth doing if you plan to keep using it.
 |---|---|
 | **Overview** | Where to start, the three ideas worth carrying away, and an honest list of what the model assumes. |
 | **Price and greeks** | One option, every sensitivity, at several maturities at once. Each greek comes with the one sentence that explains its shape. |
-| **Greek maps** | The same greeks drawn over spot and time together. The gamma cone narrowing into expiry is the picture the rest of the app keeps referring back to. |
+| **Greek maps** | The same greeks drawn over spot and time together, as a flat map or a rotatable 3-D surface. The gamma cone narrowing into expiry is the picture the rest of the app keeps referring back to. |
 | **Strategy builder** | Twelve presets and a free-form leg editor. Payoff at expiry against value today, breakevens, bounded and unbounded outcomes, and net greeks across the spot. |
 | **Hedging lab** | Sell an option, hedge the delta, run the clock over hundreds of paths. Full P&L attribution and a rebalancing-frequency sweep. |
 | **Implied vol and smile** | Prices inverted back into volatility, a parametric smile, and the two defensible deltas a smile gives you for the same option. |
@@ -100,6 +100,7 @@ optlab/
   hedge.py              path simulation, the hedging engine, P&L attribution
   smile.py              parametric vol smile and smile-adjusted delta
   ui.py                 theme, validated palette, chart builders, page furniture
+                        (Altair throughout, Plotly only for the 3-D surface)
 views/                  one module per page
 tests/                  the maths tests and the headless app tests
 ```

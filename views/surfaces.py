@@ -57,8 +57,17 @@ def render() -> None:
     with c3:
         max_days = st.select_slider("Longest maturity shown",
                                     [30, 60, 90, 180, 365, 730], value=180, key="sf_max_days")
-    kind = st.segmented_control("Option type", [bs.CALL, bs.PUT], default=bs.CALL,
-                                key="sf_kind", selection_mode="single") or bs.CALL
+    c4, c5 = st.columns([1, 1], gap="medium")
+    with c4:
+        kind = st.segmented_control("Option type", [bs.CALL, bs.PUT], default=bs.CALL,
+                                    key="sf_kind", selection_mode="single") or bs.CALL
+    with c5:
+        view = st.segmented_control(
+            "View", ["Flat map", "3-D surface"], default="Flat map", key="sf_view",
+            selection_mode="single",
+            help="The same numbers either way. The flat map is easier to read a value "
+                 "off; the surface is better for seeing the shape.",
+        ) or "Flat map"
 
     spots = np.linspace(market.spot * 0.6, market.spot * 1.4, 90)
     days = np.linspace(1, max_days, 70)
@@ -66,8 +75,18 @@ def render() -> None:
     z = bs.GREEK_FUNCS[greek](S, strike, D / 365.0, market.rate, market.div_yield,
                               market.vol, kind)
     z = bs.scale_for_display(greek, z)
-
     signed = bool(np.nanmin(z) < -1e-12 and np.nanmax(z) > 1e-12)
+
+    if view == "3-D surface":
+        _surface_view(spots, days, z, greek, signed)
+    else:
+        _map_view(spots, days, z, greek, signed)
+
+    st.divider()
+    _slices(spots, strike, market, greek, kind, max_days)
+
+
+def _map_view(spots, days, z, greek: str, signed: bool) -> None:
     frame = ui.grid_frame(spots, days, z, "spot", "days", "value")
     limit, clipped = ui.robust_limit(z)
     ui.show(
@@ -86,16 +105,54 @@ def render() -> None:
         f"{bs.display_units(greek)}." + scale_note
     )
     if clipped:
-        peak = float(np.nanmax(np.abs(z)))
+        peak = ui.signed_extreme(z)
         st.caption(
-            f"The colour scale stops at {limit:,.4f}, though {greek} reaches "
-            f"{peak:,.4f} in the corner nearest expiry. Without that cut, the single "
-            f"spike would wash the entire rest of the map into one pale shade. Hover "
-            f"any cell for its true value."
+            f"The colour scale stops at {abs(limit):,.4f} in magnitude, though {greek} "
+            f"reaches {peak:,.4f} in the corner nearest expiry. Without that cut, the "
+            f"single spike would wash the entire rest of the map into one pale shade. "
+            f"Hover any cell for its true value."
         )
 
-    st.divider()
-    _slices(spots, strike, market, greek, kind, max_days)
+
+def _surface_view(spots, days, z, greek: str, signed: bool) -> None:
+    """The same grid as a landscape you can turn around."""
+    limit, spiky = ui.robust_limit(z)
+    peak = ui.signed_extreme(z)
+
+    cap = None
+    if spiky:
+        if st.toggle(
+            "Cap the peak", value=False, key="sf_cap",
+            help="The spike is so much taller than everything else that it flattens "
+                 "the rest of the surface into the floor. Capping it lets you see "
+                 "the shape underneath.",
+        ):
+            cap = limit
+
+    ui.show_surface(
+        ui.surface(spots, days, z, x_title="Spot", y_title="Days to expiry",
+                   z_title=greek, diverging=signed, cap=cap, height=560)
+    )
+    ui.takeaway(MAP_LESSONS.get(greek, ""))
+    st.caption(
+        "Drag to rotate, scroll to zoom, double-click to reset the view. Height and "
+        f"colour both carry {greek}, in {bs.display_units(greek)}, so there is no "
+        "second scale to reconcile. Turning the surface until you are looking straight "
+        "down gives you the flat map back."
+    )
+    if spiky and cap is None:
+        st.caption(
+            f"The extreme reaches {peak:,.4f} against roughly {abs(limit):,.4f} in "
+            f"magnitude across the rest of the surface, which is why everything else "
+            f"looks flat. That contrast is the point, but switch on **cap the peak** to "
+            f"see the structure underneath it."
+        )
+    elif cap is not None:
+        st.caption(
+            f"Height is capped at {abs(cap):,.4f} in magnitude; the true extreme is "
+            f"{peak:,.4f}. Hovering any point still reports its real value, so nothing "
+            f"is hidden, only flattened."
+        )
 
 
 def _slices(spots, strike, market, greek, kind, max_days) -> None:

@@ -84,6 +84,36 @@ def test_surfaces_renders_every_greek():
         assert not at.exception, f"{greek} map raised"
 
 
+def test_surfaces_renders_every_greek_in_3d():
+    from optlab import bs
+
+    at = run_page("surfaces")
+    at.session_state["sf_view"] = "3-D surface"
+    picker = next(s for s in at.selectbox if s.key == "sf_greek")
+    for greek in bs.GREEK_FUNCS:
+        picker.select(greek).run()
+        assert not at.exception, f"{greek} surface raised"
+
+
+def test_surface_view_survives_the_peak_cap():
+    at = run_page("surfaces")
+    at.session_state["sf_view"] = "3-D surface"
+    at.session_state["sf_greek"] = "gamma"
+    at.run()
+    assert not at.exception
+    at.session_state["sf_cap"] = True
+    at.run()
+    assert not at.exception
+
+
+def test_switching_between_map_and_surface_is_clean():
+    at = run_page("surfaces")
+    for view in ("3-D surface", "Flat map", "3-D surface"):
+        at.session_state["sf_view"] = view
+        at.run()
+        assert not at.exception, f"switching to {view!r} raised"
+
+
 def test_builder_loads_every_preset():
     from optlab.strategies import PRESETS
 
