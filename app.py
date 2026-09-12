@@ -11,7 +11,10 @@ st.set_page_config(
     page_title="Options Lab",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    # "auto", not "expanded": on a phone an expanded sidebar covers the whole
+    # screen, so the first thing you see is the navigation rather than the app.
+    # Auto keeps it open on a desktop and tucks it away on a narrow screen.
+    initial_sidebar_state="auto",
 )
 
 from optlab import ui  # noqa: E402  (must follow set_page_config)

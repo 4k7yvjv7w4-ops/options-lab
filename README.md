@@ -31,6 +31,35 @@ to leave the virtual environment. Next time, only the `source` line and
 installed. Run `xcode-select --install` and accept the dialog, or install
 Python from python.org or with `brew install python`.
 
+### On a phone or tablet
+
+The app is built to work at phone width: the sidebar tucks away behind the
+arrow in the top left, the metric cards stack one per row, and the charts
+resize to the screen. Two ways to get it there.
+
+**From your own machine, over Wi-Fi.** Start it listening on the network
+rather than only on localhost:
+
+```bash
+streamlit run app.py --server.address 0.0.0.0
+```
+
+Streamlit prints a **Network URL** such as `http://192.168.1.24:8501`. Open
+that on the phone, on the same Wi-Fi. If it will not connect, macOS is likely
+blocking the incoming connection: System Settings, Network, Firewall, and allow
+incoming connections for Python. This costs nothing and needs no account, but
+it only works while your machine is awake and on the same network.
+
+**Deployed, so it works anywhere.** [Streamlit Community
+Cloud](https://share.streamlit.io) hosts apps from a GitHub repository for
+free. Sign in with GitHub, point it at this repository, branch `main`, main
+file `app.py`, and it installs `requirements.txt` and gives you a permanent
+URL. Private repositories work too; it asks for the extra GitHub permission
+when you connect.
+
+Either way, Safari's **Share, Add to Home Screen** gives it an icon and opens
+it without browser chrome, which is worth doing if you plan to keep using it.
+
 ## The pages
 
 | Page | What it is for |
